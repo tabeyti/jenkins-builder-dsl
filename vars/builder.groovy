@@ -1,5 +1,10 @@
-
 #!/usr/bin/env groovy
+
+// Uncomment for debugging
+// @Library('builder')_
+import org.tools.Logger
+import java.time.*
+import groovy.transform.Field
 
 /**
 * Builder DSL classes and step(s)
@@ -189,7 +194,7 @@ class TaskSteps extends DslBase {
     @DslStep
     def env(Map env) {
         logger.debug "env: $env"
-        def envList = script.utils.mapToEnv(env)
+        def envList = this.script.util.mapToEnv(env)
         this.env.addAll(envList)
     }
 
@@ -420,6 +425,84 @@ class TaskDSL extends TaskSteps {
         return clonedTask
     }
 
+    /**
+    * Runs the current task as a block of work (checkout, commands, archiving)
+    * on a targeted node under a specified stage.
+    */
+    def run() {
+        logger.trace("time: ${LocalDateTime.now()}")
+
+        // TODO: HACK: https://issues.jenkins-ci.org/browse/JENKINS-9104
+        def envList = ["_MSPDBSRV_ENDPOINT_=${this.script.BUILD_TAG}"] + this.env
+        envList += [
+            // We add certain fields as env vars for shell/batch
+            "name=${this.name}",
+            "node=${this.node}",
+        ]
+
+        if (this.description) {
+            this.script.currentBuild.description = this.description
+        }
+
+        this.script.stage(this.name, true) {
+            this.script.node(this.node) {
+                this.script.withEnv(envList) {
+                    this.script.withCredentials(this.creds) {
+                        def gitEnv = []
+
+                        // Source checkout
+                        if (this.git) {
+                            logger.trace('git checkout')
+                            def gitEnvMap = this.script.git this.git
+                            gitEnv = this.script.util.mapToEnv(gitEnvMap)
+                        }
+
+                        if (this.svn) {
+                            logger.trace('svn checkout')
+                            this.script.svnCheckout(this.svn)
+                        }
+
+                        // Generic checkout step
+                        if (this.checkout) {
+                            this.script.checkout(this.checkout)
+                        }
+
+                        // Fallback to 'checkout scm' if no source control steps provided
+                        if (!this.git && !this.svn && !this.checkout) {
+                            logger.trace('scm checkout')
+                            try { checkout scm } catch(e) {
+                                logger.info('no scm found')
+                            }
+                        }
+
+                        this.script.withEnv(gitEnv) {
+                            this.sh.each { this.script.sh(it) }
+                            this.bat.each { this.script.bat(it) }
+
+                            if (this.closure) {
+                                logger.trace('found closure (awww :D )')
+                                // Convert env list to map of key values as args
+                                // for the closure call
+                                def closureArgs = this.script.util.envToMap(envList + gitEnv)
+                                this.closure(closureArgs)
+                            }
+
+                            if (this.build) {
+                                this.script.build(this.build)
+                            }
+                        }
+                    }
+
+                    // Archive artifacts if specified
+                    if (this.archive) {
+                        logger.trace('archiving artifacts')
+                        this.script.archiveArtifacts(this.archive)
+                    }
+                }
+            }
+        }
+    }
+
     def evaluate() {
         if (!this.name) {
             throw new Exception('Must provide a name for a task (excluding top level "builder" call).')
@@ -429,11 +512,46 @@ class TaskDSL extends TaskSteps {
     }
 } // class TaskDSL
 
+/**
+ * Wrapper around the general scm step for svn checkout
+ * @param  remote The svn remote url
+ */
+def svnCheckout(String remote, String credId) {
+    checkout poll: false,
+        scm: [$class: 'SubversionSCM',
+            additionalCredentials: [],
+            excludedCommitMessages: '',
+            excludedRegions: '',
+            excludedRevprop: '',
+            excludedUsers: '',
+            filterChangelog: false,
+            ignoreDirPropChanges: false,
+            includedRegions: '',
+            locations: [[credentialsId: 'TODO',
+                depthOption: 'infinity',
+                ignoreExternalsOption: true,
+                local: '.',
+                remote: remote]],
+            quietOperation: true,
+            workspaceUpdater: [$class: 'UpdateUpdater']
+        ]
+}
+
+/**
+ * Stage step override to allow skipping a stage based on a flag.
+ * @param  name             Stage name.
+ * @param  execute          Bool indicating whether to run the stage.
+ * @param  closure          The stage closure to execute.
+ * @return                  A map of failures that occured, otherwise empty map.
+ */
+def stage(String name, Boolean execute, Closure closure) {
+    return (execute) ? stage(name, closure) : { echo "skipped stage $name" }
+}
+
 // builder(String name, Closure body) {
 def call(String name, Closure body) {
     // TODO
 }
-
 
 // def builder(String name) {
 def call(Closure body) {
