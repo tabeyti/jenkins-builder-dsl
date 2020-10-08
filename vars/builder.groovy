@@ -86,6 +86,78 @@ abstract class DslBase implements Serializable {
 } // class DslBase
 
 @DslClass
+class NotifyDSL extends DslBase {
+    public String on
+    // public Map email
+    public Map slackSend
+    public Boolean addErrors = false
+
+     def NotifyDSL(def script) {
+        super(script)
+    }
+
+    @DslStep
+    def addErrors(Boolean addErrors) {
+        logger.debug "addErrors $addErrors"
+        this.addErrors = addErrors
+    }
+
+    @DslStep
+    def on(String on) {
+        logger.debug "on $on"
+        this.on = on
+    }
+
+    @DslStep
+    def slackSend(Map map) {
+        assertNull(this.slackSend, 'slackSend')
+        logger.debug "slackSend: $map"
+        this.slackSend = map
+    }
+
+    @DslStep
+    def slackSend(String message) {
+        assertNull(this.slackSend, 'slackSend')
+        logger.debug "slackSend: $message"
+        this.slackSend = [message: message]
+    }
+
+    @DslStep
+    def slack(Map map) {
+        assertNull(this.slackSend, 'slack')
+        logger.debug "slackSend: $map"
+        this.slackSend = map
+    }
+
+    @DslStep
+    def slack(String message) {
+        assertNull(this.slackSend, 'slackSend')
+        logger.debug "slackSend: $message"
+        this.slackSend = [message: message]
+    }
+
+    String getStr() {
+        def str = '\n'
+        def tabs = ''
+        // (0..numTabs).each { tabs += '\t' }
+        str += "${tabs}slackSend: ${this.slackSend}\n"
+        return str
+    }
+
+    NotifyDSL clone() {
+        def clonedNotify = new NotifyDSL(this.script)
+        clonedNotify.slackSend = this.slackSend?.clone()
+        return clonedNotify
+    }
+
+    def evaluate() {
+        if (null == slackSend) { // && null == email) {
+            throw new Exception('Must provide at least one notification for the notify block.')
+        }
+    }
+}
+
+@DslClass
 class TaskSteps extends DslBase {
     public String description
     public List sh = []
@@ -318,6 +390,7 @@ class TaskDSL extends TaskSteps {
     // Task lists
     public List posts = []
     public List tasks = []
+    public List notify = []
 
     public final boolean isBuilderTask = false
 
@@ -354,6 +427,15 @@ class TaskDSL extends TaskSteps {
         }
         logger.debug "node: $node"
         this.node = node
+    }
+
+    @DslStep
+    def notify(Closure body) {
+        logger.debug 'notify'
+        def n = new NotifyDSL(this.script)
+        body.delegate = n
+        body()
+        this.notify.add(n)
     }
 
     @DslStep
@@ -535,6 +617,31 @@ def svnCheckout(String remote, String credId) {
             quietOperation: true,
             workspaceUpdater: [$class: 'UpdateUpdater']
         ]
+}
+
+/**
+ * Runs all 'notify' blocks defined in the task.
+ * @param  failedTasksMap Map of stage-name to error-output failure entries.
+ * @param  The task.
+ */
+def runNotify(Map failedTasksMap, TaskDSL task) {
+    task.notify.each { notify ->
+        def failedTasksStr = ''
+        if (notify.addErrors) {
+            failedTasksStr += '```\n'
+            failedTasksMap.each { f ->
+                failedTasksStr += "${f.key}: ${f.value}\n"
+            }
+            failedTasksStr += '```'
+        }
+        if (null != notify && (null == notify.on || currentBuild.currentResult == notify.on)) {
+            task.logger.trace("notify")
+            if (notify.slackSend) {
+                notify.slackSend.message += "\n${failedTasksStr}"
+                slackSend(notify.slackSend)
+            }
+        }
+    }
 }
 
 /**
