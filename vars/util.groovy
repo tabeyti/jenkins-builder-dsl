@@ -178,3 +178,12 @@ def getBuildUserInternal() {
   }
   return 'auto'
 }
+
+def getOs() {
+    def out = sh returnStdout:true, label: 'get OS', script: 'uname'
+    out = out.toLowerCase()
+    if (out.contains("msys")) { return "windows" }
+    if (out.contains("darwin")) { return "mac" }
+    if (out.contains("linux")) { return "linux"}
+    return null
+}
