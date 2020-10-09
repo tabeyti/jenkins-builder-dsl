@@ -5,7 +5,7 @@
 def builderTests_builder_Only() {
     builder('win') {
 
-        node    'win-large'
+        node    'linux'
         axes    VARIANT:['debug', 'release'],
                 ARCH:   ['x86_64', 'x86']
 
@@ -62,7 +62,7 @@ def builderTests_NestedTasks_SmokeAll() {
         task('axestask') {
 
             env     'TOP1=topvalue1'
-            node    'win-large'
+            node    'linux'
             axes    VARIANT:  ['Debug', 'Release'],
                     ARCH:     ['x86']
             sh      label: 'eval axes',
@@ -70,14 +70,14 @@ def builderTests_NestedTasks_SmokeAll() {
 
             task ('kid') {
 
-                node    'win-large'
+                node    'linux'
                 sh      label: 'eval kid', script: 'if [ "$TOP1" == "topvalue1" ]; then exit 1; fi;'
             }
         }
 
         task('parent') {
 
-            node    'win-large'
+            node    'linux'
             env     'PARENT=topvalue2'
             creds   string(variable: 'TOKEN',  credentialsId: 'test-secret')
             sh      label: 'env parent', script: '''
@@ -93,7 +93,7 @@ def builderTests_NestedTasks_SmokeAll() {
 
             task('child') {
 
-                node    'win-large'
+                node    'linux'
                 env     "CHILD=childvalue1"
                 axes    AXIS1: ['stuff'],
                         AXIS2: ['thing', 'other']
@@ -107,7 +107,7 @@ def builderTests_NestedTasks_SmokeAll() {
 
                 task('baby!') {
 
-                    node    'win-large'
+                    node    'linux'
                     env     "BABY=leafvalue1"
                     sh      label: 'eval baby', script: '''
                             if [ "$BABY" != "leafvalue1" ]; then exit 1; fi;
@@ -121,7 +121,7 @@ def builderTests_NestedTasks_SmokeAll() {
 
             post('parent-post') {
 
-                node    'win-large'
+                node    'linux'
                 env     'POSTCHILD=waffles'
                 sh      label: 'eval parent-post', script: 'if [ "$POSTCHILD" != "waffles" ]; then exit 1; fi;'
             }
@@ -129,20 +129,20 @@ def builderTests_NestedTasks_SmokeAll() {
 
         post('post') {
 
-            node  'win-large'
+            node  'linux'
             env   'POST1=postvalue1'
             sh    'if [ "$POST1" != "postvalue1" ]; then exit 1; fi;'
 
             task('posttask1') {
 
-                node    'win-large'
+                node    'linux'
                 env     'POSTTASK1=bacon'
                 sh      label: 'eval parent-post', script: ' if [ "$POSTTASK1" != "bacon" ]; then exit 1; fi;'
             }
 
             task('posttask2') {
 
-                node    'win-large'
+                node    'linux'
                 env     'POSTTASK2=eggs'
                 sh      label: 'eval parent-post', script: ' if [ "$POSTTASK2" != "eggs" ]; then exit 1; fi;'
             }
