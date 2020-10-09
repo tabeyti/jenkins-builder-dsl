@@ -85,6 +85,10 @@ abstract class DslBase implements Serializable {
 
 } // class DslBase
 
+/**
+* The `notify` block defined in a task used for reporting status.
+* This is executed on completion of a task (for now).
+*/
 @DslClass
 class NotifyDSL extends DslBase {
     public String on
@@ -96,18 +100,39 @@ class NotifyDSL extends DslBase {
         super(script)
     }
 
+    /**
+    * Flag indicating whether to add the failure list to a notification.
+    * Default is `false`
+    * ```groovy
+    * addErrors true
+    * ```
+    */
     @DslStep
     def addErrors(Boolean addErrors) {
         logger.debug "addErrors $addErrors"
         this.addErrors = addErrors
     }
 
+    /**
+    * Indicates on what build status to send the email notification
+    * ```groovy
+    * on    'FAILURE' // SUCCESS, FAILURE, ABORT, null (always)
+    * ```
+    */
     @DslStep
     def on(String on) {
         logger.debug "on $on"
         this.on = on
     }
 
+    /**
+    * `slackSend` Pipeline step wrapper.
+    * ```groovy
+    * slackSend     color: '#00FF00',
+    *               message: 'when in Rome!',
+    *               channel: 'my-notification-channel'
+    * ```
+    */
     @DslStep
     def slackSend(Map map) {
         assertNull(this.slackSend, 'slackSend')
@@ -115,6 +140,12 @@ class NotifyDSL extends DslBase {
         this.slackSend = map
     }
 
+    /**
+    * `slackSend` Pipeline step wrapper.
+    * ```groovy
+    * slackSend     'ren in Wome'
+    * ```
+    */
     @DslStep
     def slackSend(String message) {
         assertNull(this.slackSend, 'slackSend')
@@ -122,6 +153,9 @@ class NotifyDSL extends DslBase {
         this.slackSend = [message: message]
     }
 
+    /**
+    * Shorthand for `slackSend` step.
+    */
     @DslStep
     def slack(Map map) {
         assertNull(this.slackSend, 'slack')
@@ -129,6 +163,9 @@ class NotifyDSL extends DslBase {
         this.slackSend = map
     }
 
+    /**
+    * Shorthand for `slackSend` step.
+    */
     @DslStep
     def slack(String message) {
         assertNull(this.slackSend, 'slackSend')
@@ -157,6 +194,18 @@ class NotifyDSL extends DslBase {
     }
 }
 
+
+/**
+* The steps that run on a task like block (e.g. builder, task, post).
+* Most steps allow only one entry per instance, excluding the following:
+*   * `sh` and `bat`
+*   * `creds`
+*   * `env`
+*
+* These steps are sharable between task blocks via 'share' block(s).
+* > __NOTE:__ Steps that only allow one definition per block (e.g. git, svn, p4s, etc.)
+* > if "shared" will override the inheriting task's steps.
+*/
 @DslClass
 class TaskSteps extends DslBase {
     public String description
@@ -181,6 +230,12 @@ class TaskSteps extends DslBase {
         super(script, name)
     }
 
+    /**
+    * `archiveArtifacts` Pipeline step wrapper
+    * ```groovy
+    * archive   '*.log'
+    * ```
+    */
     @DslStep
     def archive(String pattern) {
         assertNull(this.archive, 'archive')
@@ -188,6 +243,12 @@ class TaskSteps extends DslBase {
         this.archive = [artifacts: pattern]
     }
 
+    /**
+    * `archiveArtifacts` Pipeline step wrapper
+    * ```groovy
+    * archive   artifacts: '*.log', allowEmptyArchive: true
+    * ```
+    */
     @DslStep
     def archive(Map map) {
         assertNull(this.archive, 'archive')
@@ -195,24 +256,51 @@ class TaskSteps extends DslBase {
         this.archive = map
     }
 
+    /**
+    * `bat` Pipeline step wrapper.
+    * ```groovy
+    * bat   'echo HI'
+    * ```
+    */
     @DslStep
     def bat(String cmd) {
         logger.debug "bat: $cmd"
         this.bat.add(cmd)
     }
 
+    /**
+    * `bat` Pipeline step wrapper.
+    * A list of strings as commands.
+    * ```groovy
+    * bat   'echo HI > out.log',
+    *       'type out.log'
+    * ```
+    */
     @DslStep
     def bat(List cmds) {
         logger.debug "bat: $cmds"
         this.bat = this.bat + cmds
     }
 
+    /**
+    * `bat` Pipeline step wrapper.
+    * ```groovy
+    * bat   label: 'greetings step',
+    *       script: 'echo HI'
+    * ```
+    */
     @DslStep
     def bat(Map map) {
         logger.debug "bat: $map"
         this.bat.add(map)
     }
 
+    /**
+    * `build` Pipeline step wrapper.
+    * ```groovy
+    * build job: 'test', parameters: [...]
+    * ```
+    */
     @DslStep
     def build(Map build) {
         assertNull(this.build, 'build')
@@ -220,6 +308,12 @@ class TaskSteps extends DslBase {
         this.build = build
     }
 
+    /**
+    * `build` Pipeline step wrapper.
+    * ```groovy
+    * build 'test'
+    * ```
+    */
     @DslStep
     def build(String build) {
         assertNull(this.build, 'build')
@@ -227,6 +321,19 @@ class TaskSteps extends DslBase {
         this.build = [job: build, parameters: []]
     }
 
+    /**
+    * A closure to be executed from the context of this class.
+    * User can access the 'script' member to invoke script
+    * level pipeline steps and such.
+    *
+    * __NOTE:__ Currently not sharable between steps
+    * ```groovy
+    * closure {
+    *     def content = script.readFile 'config.json'
+    *     script.build job: 'test', parameters: [string(name: 'CONFIG', value: content)]
+    * }
+    * ```
+    */
     @DslStep
     def closure(Closure c) {
         assertNull(this.closureBlock, 'closure')
@@ -234,12 +341,27 @@ class TaskSteps extends DslBase {
         this.closureBlock = c
     }
 
+    /**
+    * `withCredentials` Pipelin step wrapper. Takes a list of credentials
+    * objects to be used in the task.
+    * ```groovy
+    * creds usernamePassword(credentialsId: 'someid', usernameVariable: 'UNAME', passwordVariable: 'PWD'),
+    *       string(credentialsId: 'otherId', variable: 'TOKEN'),
+    *       ...
+    * ```
+    */
     @DslStep
     def creds(Object...creds) {
         logger.debug "creds: $creds"
         this.creds = creds
     }
 
+    /**
+    * `checkout` Pipeline step wrapper.
+    * ```groovy
+    * checkout  $class: 'GitSCM', branches: [[name: 'master']], extensions: ...
+    * ```
+    */
     @DslStep
     def checkout(Map checkout) {
         assertNull(this.checkout, 'checkout')
@@ -247,6 +369,9 @@ class TaskSteps extends DslBase {
         this.checkout = checkout
     }
 
+    /**
+    * Sets the `currentBuild.description` during task execution.
+    */
     @DslStep
     def description(String description) {
         assertNull(this.description, 'description')
@@ -254,6 +379,9 @@ class TaskSteps extends DslBase {
         this.description = description
     }
 
+    /**
+    * Shorthand for the `description` step.
+    */
     @DslStep
     def desc(String description) {
         assertNull(this.description, 'description')
@@ -261,6 +389,15 @@ class TaskSteps extends DslBase {
         this.description = description
     }
 
+    /**
+    * `withEnv` Pipeline step wrapper.
+    * Map key/values are converted to 'KEY=VAL' strings.
+    * ```groovy
+    * env   SOME_VAR1: "$myval",
+    *       SOME_VAR2: "$otherval"
+    *       ...
+    * ```
+    */
     @DslStep
     def env(Map env) {
         logger.debug "env: $env"
@@ -268,12 +405,27 @@ class TaskSteps extends DslBase {
         this.env.addAll(envList)
     }
 
+    /**
+    * `withEnv` Pipeline step wrapper.
+    * ```groovy
+    * env   "SOME_VAR1=$someval",
+    *       "SOME_VAR2=$otherval",
+    *       ...
+    * ```
+    */
     @DslStep
     def env(String...env) {
         logger.debug "env: $env"
         this.env.addAll(env)
     }
 
+    /**
+    * `git` Pipeline step wrapper.
+    * ```groovy
+    * git   url: 'https://github.com/ham/sammich.git',
+    *       branch: 'pickles'
+    * ```
+    */
     @DslStep
     def git(Object git) {
         assertNull(this.git, 'git')
@@ -281,6 +433,17 @@ class TaskSteps extends DslBase {
         this.git = git
     }
 
+    /**
+    * `p4util.sync` shared lib step wrapper.
+    *
+    * Token replacement of env vars on  the map passed to this call occures
+    * so the user can take advantage of using `$P4_DATA_BRANCH` and
+    * `$P4_WORKSPACE` within their view mappings.
+    * ```groovy
+    * p4s   branch: 'master'
+    *       view: '//mydepot/branches/$P4_DATA_BRANCH/... //$P4_WORKSPACE/branches/$P4_DATA_BRANCH/...'
+    * ```
+    */
     @DslStep
     def p4s(Map map) {
         assertNull(this.p4s, 'p4s')
@@ -288,6 +451,13 @@ class TaskSteps extends DslBase {
         this.p4s = map
     }
 
+    /**
+    * `p4util.changelist` shared lib step wrapper
+    * ```groovy
+    * p4cl  branch: 'master',
+    *       view: '//mydepot/branches/$P4_DATA_BRANCH/... //$P4_WORKSPACE/branches/$P4_DATA_BRANCH/...'
+    * ```
+    */
     @DslStep
     def p4cl(Map map) {
         assertNull(this.p4cl, 'p4cl')
@@ -295,12 +465,26 @@ class TaskSteps extends DslBase {
         this.p4cl = map
     }
 
+    /**
+    * `sh` Pipeline step wrapper.
+    * ```groovy
+    * sh    'echo HI'
+    * ```
+    */
     @DslStep
     def sh(String cmd) {
         logger.debug "sh: $cmd"
         this.sh.add([script: cmd])
     }
 
+    /**
+    * `sh` Pipeline step wrapper.
+    * A list of strings as commands.
+    * ```groovy
+    * sh    'echo HI > out.log',
+    *       'cat out.log'
+    * ```
+    */
     @DslStep
     def sh(List cmds) {
         logger.debug "sh: $cmds"
@@ -308,6 +492,12 @@ class TaskSteps extends DslBase {
         cmds.each { this.sh.add([script: it]) }
     }
 
+    /**
+    * `sh` Pipeline step wrapper.
+    * ```groovy
+    * sh    label: 'greetings step', script: 'echo HI'
+    * ```
+    */
     @DslStep
     def sh(Map map) {
         logger.debug "sh: $map"
@@ -381,6 +571,17 @@ class TaskSteps extends DslBase {
     def evaluate() { }
 }
 
+/**
+ * The `task` block which allows a user to define an environment, a targeted
+ * agent and stage name, and a body of work (steps) to run.
+ *
+ * The call to `builder` is a task block, along with any subsequent `task` or `post`
+ * blocks defined inside. This means `task` blocks can be defined in a nested fashion,
+ * giving the user the ability to create execution trees.
+ * > __NOTE:__  Nested parallel tasks will have name of the parent task prepended to it.
+ * > This is for visualizing the chain of task calls when viewing in Jenkins.
+ */
+ @DslClass
 class TaskDSL extends TaskSteps {
 
     public String node = 'master'
@@ -408,6 +609,20 @@ class TaskDSL extends TaskSteps {
         this.isBuilderTask = isBuilderTask
     }
 
+    /**
+    * A map of string lists for creating combinations
+    * where individual tasks are spawned to run each combo
+    * in parallel.
+    *
+    * The key of each map entry will be an env var that can be
+    * used in shell steps. Each keys will contain that task's combination
+    * values when executing.
+    * ```groovy
+    * axes  ARCH:       ['x86', 'x86_64'],
+    *       VARIANT:    ['debug', 'release', 'pofile']
+    * ```
+    * > Will spawn 6 parallel tasks
+    */
     @DslStep
     def axes(Map config) {
         assertNull(this.axes, 'axes')
@@ -415,18 +630,36 @@ class TaskDSL extends TaskSteps {
         this.axes = config
     }
 
+    /**
+    * Flag to disable this task from execution.
+    * ```groovy
+    * enable    (params.BUILD_TYPE == 'RC')
+    * ```
+    */
     @DslStep
     def enable(Boolean isEnabled) {
         logger.debug "enable: $isEnabled"
         this.enable = isEnabled
     }
 
+    /**
+    * The name of the task. Used in stage labels.
+    * ```groovy
+    * name      'win-build'
+    * ```
+    */
     @DslStep
     def name(String name) {
         assertNull(this.name, 'name')
         this.name = name
     }
 
+    /**
+    * The target node label to run the task on.
+    * ```groovy
+    * node      'win&&vs2019'
+    * ```
+    */
     @DslStep
     def node(String node) {
         if ('master' != this.node) {
@@ -436,6 +669,15 @@ class TaskDSL extends TaskSteps {
         this.node = node
     }
 
+    /**
+    * Notify block to be executed on end of steps execution.
+    * See NotifyDSL for step details.
+    * ```groovy
+    * notify {
+    *   slackSend   "Job ${env.JOB_NAME} FINISHED"
+    * }
+    * ```
+    */
     @DslStep
     def notify(Closure body) {
         logger.debug 'notify'
@@ -445,6 +687,15 @@ class TaskDSL extends TaskSteps {
         this.notify.add(n)
     }
 
+    /**
+    * Tasks to be ran following parallel `task` execution (at the end).
+    * > __NOTE:__ Post blocks are executed in serial in the order defined.
+    * ```groovy
+    * post {
+    *   ...
+    * }
+    * ```
+    */
     @DslStep
     def post(Closure body) {
         logger.debug 'post'
@@ -454,6 +705,15 @@ class TaskDSL extends TaskSteps {
         this.posts.add(t)
     }
 
+     /**
+    * Tasks to be ran following `task` execution (at the end).
+    * > __NOTE:__ Post blocks are executed in serial in the order defined.
+    * ```groovy
+    * post('publish') {
+    *   ...
+    * }
+    * ```
+    */
     @DslStep
     def post(String name, Closure body) {
         logger.debug "post: ${name}"
@@ -463,6 +723,17 @@ class TaskDSL extends TaskSteps {
         this.posts.add(t)
     }
 
+    /**
+    * Steps to be given to all child tasks (global).
+    * They are not used the current task block where they are defined.
+    * ```groovy
+    * share {
+    *   git     url: "git@github.com:myorg/my-repo.git"
+    *   creds   string(credentialsId: 'my-api-token', variable: 'TOKEN')
+    *   sh      'pip install -r requirements.txt'
+    * }
+    * ```
+    */
     @DslStep
     def share(Closure body) {
         assertNull(this.share, 'share')
@@ -473,12 +744,27 @@ class TaskDSL extends TaskSteps {
         this.share = s
     }
 
+    /**
+    * Flag indicating whether to use a stage block or not.
+    * ```groovy
+    * show  false
+    * ```
+    */
     @DslStep
     def show(Boolean show) {
         logger.debug "show $show"
         this.show = show
     }
 
+    /**
+    * A task block to be executed in parallel with other tasks
+    * defined within the same scope.
+    * ```groovy
+    * task {
+    *   ...
+    * }
+    * ```
+    */
     @DslStep
     def task(Closure body) {
         logger.debug 'task'
@@ -488,6 +774,15 @@ class TaskDSL extends TaskSteps {
         this.tasks.add(t)
     }
 
+    /**
+    * A task block to be executed in parallel with other tasks
+    * defined within the same scope.
+    * ```groovy
+    * task('my-task-name') {
+    *   ...
+    * }
+    * ```
+    */
     @DslStep
     def task(String name, Closure body) {
         logger.debug "task: ${name}"
@@ -522,6 +817,7 @@ class TaskDSL extends TaskSteps {
         clonedTask.axes = this.axes?.clone()
         clonedTask.node = this.node
         clonedTask.enable = this.enable
+        clonedTask.show = this.show
 
         // Recursively clone child tasks. Science!
         this.tasks.each { clonedTask.tasks.add(it.clone()) }
@@ -631,7 +927,7 @@ def svnCheckout(String remote, String credId) {
             filterChangelog: false,
             ignoreDirPropChanges: false,
             includedRegions: '',
-            locations: [[credentialsId: 'TODO',
+            locations: [[credentialsId: credId,
                 depthOption: 'infinity',
                 ignoreExternalsOption: true,
                 local: '.',
