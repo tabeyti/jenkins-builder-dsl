@@ -15,7 +15,7 @@ import groovy.transform.Field
 // For debugging, adjust the logging level here
 // to affect global DSL class logging level
 // [NONE, FATAL, ERROR, WARN, INFO, DEBUG, TRACE, ALL]
-@Field LOG_LEVEL = 'INFO'
+@Field LOG_LEVEL = 'ERROR'
 
 
 // DSL class annotation for doc parsing
@@ -166,7 +166,7 @@ class TaskSteps extends DslBase {
     public List creds = []
     public def archive
     public Map build
-    public Closure closure
+    public Closure closureBlock
     public Map p4s
     public Map p4cl
     public def git
@@ -229,11 +229,9 @@ class TaskSteps extends DslBase {
 
     @DslStep
     def closure(Closure c) {
-        assertNull(this.closure, 'closure')
+        assertNull(this.closureBlock, 'closure')
         logger.debug "closure: closure"
-        this.closure = c
-        this.closure.delegate = this
-        this.closure.owner = this
+        this.closureBlock = c
     }
 
     @DslStep
@@ -329,7 +327,7 @@ class TaskSteps extends DslBase {
         this.creds = otherTask.creds + this.creds
         this.archive = this.archive ?: otherTask.archive
         this.build =  this.build ?: otherTask.build
-        this.closure = this.closure ?: otherTask.closure?.clone()
+        this.closureBlock = this.closureBlock ?: otherTask.closureBlock?.clone()
         this.p4s = this.p4s ?: otherTask.p4s
         this.p4cl = this.p4cl ?: otherTask.p4cl
         this.git = this.git ?: otherTask.git
@@ -351,7 +349,7 @@ class TaskSteps extends DslBase {
         str += "${tabs}creds: ${this.creds}\n"
         str += "${tabs}archive: ${this.archive}\n"
         str += "${tabs}build: ${this.build}\n"
-        // str += "${tabs}closure: ${this.closure}\n"
+        // str += "${tabs}closureBlock: ${this.closureBlock}\n"
         str += "${tabs}p4s: ${this.p4s}\n"
         str += "${tabs}p4cl: ${this.p4cl}\n"
         str += "${tabs}git: ${this.git}\n"
@@ -371,7 +369,7 @@ class TaskSteps extends DslBase {
         clonedTask.creds = this.creds.clone()
         clonedTask.archive = this.archive?.clone()
         clonedTask.build = this.build?.clone()
-        clonedTask.closure = this.closure?.clone()
+        clonedTask.closureBlock = this.closureBlock?.clone()
         clonedTask.p4s = this.p4s?.clone()
         clonedTask.p4cl = this.p4cl?.clone()
         clonedTask.git = this.git?.clone()
@@ -387,10 +385,13 @@ class TaskDSL extends TaskSteps {
 
     public String node = 'master'
     public Map axes
+    public Boolean enable = true
+    public Boolean show = true
     // Task lists
     public List posts = []
     public List tasks = []
     public List notify = []
+    public TaskSteps share
 
     public final boolean isBuilderTask = false
 
@@ -412,6 +413,12 @@ class TaskDSL extends TaskSteps {
         assertNull(this.axes, 'axes')
         logger.debug "axes: $config"
         this.axes = config
+    }
+
+    @DslStep
+    def enable(Boolean isEnabled) {
+        logger.debug "enable: $isEnabled"
+        this.enable = isEnabled
     }
 
     @DslStep
@@ -457,6 +464,22 @@ class TaskDSL extends TaskSteps {
     }
 
     @DslStep
+    def share(Closure body) {
+        assertNull(this.share, 'share')
+        logger.debug 'share'
+        def s = new TaskSteps(this.script)
+        body.delegate = s
+        body()
+        this.share = s
+    }
+
+    @DslStep
+    def show(Boolean show) {
+        logger.debug "show $show"
+        this.show = show
+    }
+
+    @DslStep
     def task(Closure body) {
         logger.debug 'task'
         def t = new TaskDSL(this.script)
@@ -480,6 +503,7 @@ class TaskDSL extends TaskSteps {
         // (0..numTabs).each { tabs += '\t' }
         str += "${tabs}name: ${this.name}\n"
         str += "${tabs}axes: ${this.axes}\n"
+        str += "${tabs}enable: ${this.enable}\n"
         str += super.getStr()
 
         // Task lists
@@ -497,6 +521,7 @@ class TaskDSL extends TaskSteps {
         clonedTask.name = this.name
         clonedTask.axes = this.axes?.clone()
         clonedTask.node = this.node
+        clonedTask.enable = this.enable
 
         // Recursively clone child tasks. Science!
         this.tasks.each { clonedTask.tasks.add(it.clone()) }
@@ -561,12 +586,9 @@ class TaskDSL extends TaskSteps {
                             this.sh.each { this.script.sh(it) }
                             this.bat.each { this.script.bat(it) }
 
-                            if (this.closure) {
+                            if (this.closureBlock) {
                                 logger.trace('found closure (awww :D )')
-                                // Convert env list to map of key values as args
-                                // for the closure call
-                                def closureArgs = this.script.util.envToMap(envList + gitEnv)
-                                this.closure(closureArgs)
+                                this.closureBlock()
                             }
 
                             if (this.build) {
@@ -655,12 +677,178 @@ def stage(String name, Boolean execute, Closure closure) {
     return (execute) ? stage(name, closure) : { echo "skipped stage $name" }
 }
 
-// builder(String name, Closure body) {
-def call(String name, Closure body) {
-    // TODO
+/**
+ * Recursive method for running the flow of task {...} block.
+ * @param  task             The task object to run.
+ * @param  sharedSteps      The shared task steps for this task and its children.
+ * @return                  A map of failures that occured, otherwise empty map.
+ */
+Map runTask(TaskDSL task, TaskSteps sharedSteps = null) {
+    task.logger.info("entered")
+    task.logger.debug(task.str)
+    task.logger.debug("shared steps: ${sharedSteps?.str}")
+
+    def failedTasksMap = [:]
+    def isEmptyTask = false
+    def isBuilderTask = task.isBuilderTask
+
+    //  this is the top level empty task, skip running
+    if (!sharedSteps) {
+        sharedSteps = new TaskSteps(this)
+        isEmptyTask = true
+    } else {
+        // Run task with shared steps
+        task.combineTaskSteps(sharedSteps)
+        task.logger.debug("shared added: ${task.str}")
+        task.logger.info("running")
+        task.run()
+    }
+
+    task.logger.debug("children: ${task.tasks.size()}")
+
+    // If this is a leaf task, then leaf!
+    if (task.tasks.isEmpty() && task.posts.isEmpty()) { return failedTasksMap }
+
+    // Before executing children (phrasing?), combine
+    // the global shared steps with this parent task's shared steps
+    // for its babies. Ordering of addition here is important as
+    // we want the current task's shared steps to be invoked after
+    // the globals.
+    sharedSteps = sharedSteps.clone()
+    sharedSteps.combineTaskSteps(task.share)
+
+    task.logger.debug("combined shared steps: ${sharedSteps.str}")
+
+    // If there is only one child task defined, with no axes, run it without
+    // a parallel block so it doesn't looks weird in blue-ocean view
+    if (1 >= task.tasks.size() && !task.tasks[0].axes) {
+        def t = task.tasks[0]
+        try {
+            failedTasksMap += runTask(t, sharedSteps)
+        } catch (e) {
+            t.logger.error "Task failed!"
+            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { throw new Exception(e) }
+            failedTasksMap += ["${t.name}": e.message]
+        } finally {
+            runNotify(failedTasksMap, t)
+            return failedTasksMap
+        }
+    }
+
+    // Recursively run child tasks in parallel
+    def parTasks = [:]
+    task.tasks.each { t ->
+
+        t.name = !isBuilderTask && !isEmptyTask ? "${task.name} ► ${t.name}" : t.name
+
+        // If this task is disabled, GET OUT OF HERE!!
+        if (!t.enable) { return }
+
+        // If axes config was provided, create worker blocks from combinations of
+        // the axes map's key/values and add them to the parallel task list
+        if (t.axes) {
+            def createComboList = util.createComboList(t.axes)
+            createComboList.each { c ->
+                // Add environment vars for the axes keys to be used in shell scripts.
+                // Clone the task so we aren't concatenating env vars to the primary task.
+                def clonedTask =    t.clone()
+                clonedTask.env +=   util.mapToEnv(c)
+                def envLabel =      util.mapToLabel(c)
+                clonedTask.name =   "${clonedTask.name}-${envLabel}"
+
+                task.logger.trace("cloned task: ${clonedTask.name}")
+                task.logger.debug("cloned task: ${clonedTask.str}")
+
+                parTasks[clonedTask.name] = {
+                    try {
+                        failedTasksMap += runTask(clonedTask, sharedSteps)
+                    } catch (e) {
+                        clonedTask.logger.error "Task failed!"
+                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { throw new Exception(e) }
+                        failedTasksMap += ["${clonedTask.name}": e.message]
+                    } finally {
+                        runNotify(failedTasksMap, clonedTask)
+                    }
+                } // parTasks
+            } // createComboList
+        }
+        // If a single task, add to parallel task list
+        else {
+            task.logger.trace("single task: ${t.name}")
+            task.logger.debug("single task: ${t.name} - ${t.str}")
+            parTasks[t.name] = {
+                try {
+                    failedTasksMap += runTask(t, sharedSteps)
+                } catch (e) {
+                    t.logger.error "Task failed!"
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { throw new Exception(e) }
+                    failedTasksMap += ["${t.name}": e.message]
+                } finally {
+                    runNotify(failedTasksMap, t)
+                }
+            } // parTasks
+        }
+    }
+
+    // Run all parallel tasks.
+    try { parallel parTasks }
+    catch (e) { /*ignore*/ }
+
+    // Recursively run all 'post' tasks in serial.
+    if (currentBuild.currentResult != 'FAILURE' && !task.posts.isEmpty()) {
+        task.posts.each { p ->
+            if (!p.enable) { return }
+            p.name = !isBuilderTask ? "${task.name} ► ${p.name}" : p.name
+            task.logger.trace("post task: ${p.name}")
+            def envList = p.env
+            try {
+                failedTasksMap += runTask(p, sharedSteps)
+            } catch (e) {
+                task.logger.error "Task failed!"
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { throw new Exception(e) }
+                failedTasksMap += ["${p.name}": e.message]
+            } finally {
+                runNotify(failedTasksMap, p)
+            }
+        } // posts
+    }
+
+    return failedTasksMap
 }
 
-// def builder(String name) {
+/**
+ * Starts the execution of the top level 'Builder' task class.
+ * @param  b        The builder task
+ */
+def runBuilder(TaskDSL b) {
+    TaskDSL emptyParentTask = new TaskDSL(this)
+    emptyParentTask.tasks.add(b)
+
+    def failedTasksMap = runTask(emptyParentTask)
+
+    if (failedTasksMap) {
+        def message = ''
+        failedTasksMap.each { message += "$it\n" }
+        println "FAILED TASKS:\n$message"
+    }
+}
+
 def call(Closure body) {
-    // TODO
+// def builder(Closure body) {
+    TaskDSL b = new TaskDSL(this, 'builder', true)
+    body.delegate = b
+    body()
+    b.evaluate()
+
+    runBuilder(b)
+}
+
+def call(String name, Closure body) {
+// def builder(String name, Closure body) {
+    TaskDSL b = new TaskDSL(this, name, true)
+    body.delegate = b
+    body()
+    b.evaluate()
+
+    runBuilder(b)
 }
