@@ -154,3 +154,5 @@ def builderTests_NestedTasks_SmokeAll() {
 String getRepoUri() {
     return 'https://github.com/tabeyti/test.git'
 }
+
+return this
