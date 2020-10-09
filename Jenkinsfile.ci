@@ -1,0 +1,189 @@
+#!/usr/bin/env groovy
+
+import java.text.SimpleDateFormat
+
+class TestSuite implements Serializable {
+  String name
+  List testCases
+
+  def getNumFailures() {
+    return testCases.count { tc -> null != tc.failureMessage }
+  }
+
+  String toString() {
+    return "name: ${name}, testCases: ${testCases}"
+  }
+}
+
+class TestCase implements Serializable {
+  String name
+  String failureMessage
+
+  String toString() {
+    return "name: ${this.name}, failureMessage ${failureMessage}"
+  }
+}
+
+/**
+ * Prints the passed message with a boundary line.
+ * Default is above the message. If upper set to false,
+ * then it prints it below the message.
+ *
+ * @param  message [description]
+ * @param  upper   [description]
+ * @return         [description]
+ */
+def printWithBoundary(def message, def upper = true) {
+  def boundryStr = '-'.multiply(80)
+  if (upper) {
+    println "${boundryStr}\n${message}"
+  }
+  else {
+    println "${message}\n${boundryStr}"
+  }
+}
+
+/**
+ * Uses the provided script instance and method string
+ * to dynamically invoke the test.
+ *
+ * "Reflection is what the Gods use. What is Man but a
+ * God unto lesser species."
+ *   - Mother Teresa
+ *
+ * @param  script   [description]
+ * @param  method   [description]
+ * @return          [description]
+ */
+def runTestMethod(def script, def method) {
+
+    try {
+        printWithBoundary("[TEST] ${method}()")
+        script."${method}"()
+        printWithBoundary("[PASSED] ${method}()", false)
+        return null
+    }
+    catch(Exception e) {
+        printWithBoundary("[FAILED] ${method}() - ${e}", false)
+        return e.toString()
+    }
+}
+
+/**
+ * Attempts to locate an associated test file for the provided step.
+ * If found, it will refelect to locate all test methods, and
+ * invoke each as a test, aggregating any failures that occur.
+ *
+ * NOTE: Test methods should contain the name of the test step
+ * within the method signature, otherwise we will not locate it.
+ * E.G.: step: someStep - testFile: someStepTests.groovy
+ * - Will Locate: someStepTests_ValidateWindows
+ * - Won't Locate: validateWindows
+ *
+ * @param  stepFile   [description]
+ * @return            [description]
+ */
+def runTestSuite(def stepFile) {
+
+    // Attempt to locate an associated test suite related to the
+    // passed step file.
+    def stepName = stepFile.take(stepFile.lastIndexOf('.'))
+    def testSuite = "${stepName}Tests"
+    def testFile = "${testSuite}.groovy"
+
+    println "Checking if ${testFile} exists..."
+    def exists = fileExists "tests/${testFile}"
+    if (!exists) {
+        println "Could not locate ${testFile} for step: ${stepName}."
+        return null
+    }
+    println "Found test suite: ${testSuite}"
+    println "Scanning ${testSuite} for tests..."
+
+    // Load the script and use reflection to locate the test methods.
+    def script = load "tests/${testFile}"
+    def testMethods = []
+    def errors = []
+    script.metaClass.methods.each { m ->
+        def methodName = m.name
+        if (!methodName.contains(testSuite)) return
+        println "Found test method: ${methodName}"
+        testMethods.add(methodName)
+    }
+
+    def ts = new TestSuite(name: testSuite)
+    ts.testCases = []
+
+    // Run the test methods, tracking failures.
+    testMethods.each { tm ->
+        def tc = new TestCase(name: tm)
+        def failure = runTestMethod(script, tm)
+        if (null != failure) {
+            tc.failureMessage = failure
+        }
+        ts.testCases.add(tc)
+    }
+    return ts
+}
+
+def writeJunitResults(List testSuiteList) {
+  def writer = '<testsuites>'
+  testSuiteList.each { ts ->
+    writer += "<testsuite name=\"${ts.name}\" tests=\"${ts.testCases.size()}\" failures=\"${ts.numFailures}\">"
+    ts.testCases.each { tc ->
+      writer += "<testcase name=\"${tc.name}\">"
+      if (null != tc.failureMessage) {
+        writer += "<failure message=\"${tc.failureMessage}\"></failure>"
+      }
+      writer += "</testcase>"
+    }
+    writer += '</testsuite>'
+  }
+  writer += '</testsuites>'
+
+  def dateFormat = new SimpleDateFormat("yyyyMMddHHmm")
+  def date = new Date()
+  writeFile file:"test_output/${dateFormat.format(date)}.xml", text:writer
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// main
+///////////////////////////////////////////////////////////////////////////////
+
+node('master') {
+
+    def testSuiteList = []
+    def stepFiles = []
+
+    stage('Checkout') { checkout scm }
+
+    // Load our local repo as the library to utilize for testing.
+    //
+    // NOTE:
+    // If the identifier for the library changes on the Jenkins Master
+    // then this identifier also needs to change.
+    library identifier: "builder@${env.BRANCH}", retriever: legacySCM(scm)
+
+    stage('Locate Library Steps') {
+        def files = findFiles glob:"vars/*.groovy"
+        stepFiles = files.collect { it.name }
+        println "Step files located: ${stepFiles}"
+    }
+
+    stage('Run Library Tests') {
+        stepFiles.each { s ->
+            println '='.multiply(80)
+            println "Evaluating step file: ${s}"
+            def result = runTestSuite(s)
+            if (null != result) {
+                testSuiteList.add(result)
+            }
+            println '='.multiply(80)
+        }
+    }
+
+    // The recording of test results will set the build status
+    // to UNSTABLE automatically (if tests failures are found)
+    writeJunitResults(testSuiteList)
+    junit "test_output/**"
+}
